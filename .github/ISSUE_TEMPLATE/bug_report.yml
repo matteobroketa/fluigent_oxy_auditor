@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem in the application
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach confidential OXY/CSV files to a public issue. Use a minimal synthetic example where possible.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Load ...
+        2. Change ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: "Chrome 140, Firefox 142, Safari ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected area
+      options:
+        - OXY parsing / phase reconstruction
+        - CSV parsing / channel mapping
+        - Automatic alignment
+        - Accuracy metrics
+        - Trace/deviation charts
+        - Phase analysis
+        - Export
+        - Responsive layout / UI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Non-sensitive diagnostics
+      description: Include console errors, metric values, screenshots, or synthetic input details. Do not include confidential data.

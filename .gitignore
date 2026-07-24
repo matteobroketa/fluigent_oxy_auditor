@@ -1,0 +1,22 @@
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local development / temporary files
+*.log
+*.tmp
+*.bak
+_site/
+
+# Experimental data: keep private by default
+*.oxy
+*.csv
+*.tsv
+*.xlsx
+*.xls
+
+# Allow deliberately committed documentation/examples if later added
+!examples/**/*.csv
+!examples/**/*.oxy
