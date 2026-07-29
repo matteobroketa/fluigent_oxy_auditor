@@ -18,6 +18,10 @@ It reconstructs the OXY timeline, maps recorded flow channels, aligns CSV elapse
 - Report profile MAE, tracking MAE/RMSE, bias, P95 and maximum absolute error, tolerance compliance, signed and absolute volume error, and settling time.
 - Explain metrics in the interface, including the distinction between profile agreement and tracking accuracy.
 - Export flow analysis as CSV and JSON.
+- Use accessible keyboard-navigable analysis tabs, reduced-motion support,
+  system-aware light/dark themes, and a print-ready active report view.
+- Clear and replace loaded files without reloading; all bundled fonts and
+  interface assets remain local.
 
 ## Pressure analysis
 
