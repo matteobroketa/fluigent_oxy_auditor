@@ -1323,11 +1323,11 @@
           </div>
           <div class="sidebar-step">
           <div class="section-title" style="margin-top: 16px">
-            Deviation settings
+            Process acceptance
           </div>
           <div class="inline2">
             <div class="field">
-              <label>Absolute tol.</label
+              <label>Absolute process floor <span>µL/min</span></label
               ><input
                 id="absTol"
                 type="number"
@@ -1337,18 +1337,19 @@
               />
             </div>
             <div class="field">
-              <label>Relative tol.</label
+              <label>Relative process tolerance <span>%</span></label
               ><input id="relTol" type="number" min="0" step="1" value="5" />
             </div>
+          </div>
+          <div class="field">
+            <label>Tracking tolerance basis</label><select id="toleranceMode"><option value="manufacturer-aware" selected>Manufacturer-aware (recommended)</option><option value="process-only">Process tolerance only</option><option value="manufacturer-only">Manufacturer specification only</option></select>
           </div>
           <div class="field">
             <label>Transition grace <span>s</span></label
             ><input id="grace" type="number" min="0" step="0.5" value="2" />
           </div>
           <div class="hint">
-            Within-tolerance uses max(absolute tolerance, relative tolerance ×
-            target). Analysis metrics exclude the grace period after genuine
-            target changes.
+            Process acceptance is an experimental requirement, not a sensor specification. Manufacturer-aware tracking uses the greater of process acceptance and the assigned sensor-accuracy envelope. Profile agreement always uses process acceptance only.
           </div>
           <div class="status">
             <span class="dot" id="statusDot"></span
@@ -3938,15 +3939,15 @@
                 0.5,
               ),
               belowPressure: quantile(
-                by((x) => x.e < -tolerance(x.target)),
+                by((x) => x.e < -trackingDecision(flow, x.actual, x.target).value),
                 0.5,
               ),
               withinPressure: quantile(
-                by((x) => Math.abs(x.e) <= tolerance(x.target)),
+                by((x) => Math.abs(x.e) <= trackingDecision(flow, x.actual, x.target).value),
                 0.5,
               ),
               abovePressure: quantile(
-                by((x) => x.e > tolerance(x.target)),
+                by((x) => x.e > trackingDecision(flow, x.actual, x.target).value),
                 0.5,
               ),
               ratio: quantile(ratio, 0.5),
@@ -3984,7 +3985,7 @@
               ),
               flowBias: pMean(pr.map((x) => x.e)),
               within: pr.length
-                ? (pr.filter((x) => Math.abs(x.e) <= tolerance(x.target))
+                ? (pr.filter((x) => Math.abs(x.e) <= trackingDecision(flow, x.actual, x.target).value)
                     .length /
                     pr.length) *
                   100
@@ -4009,7 +4010,7 @@
           }
           for (const phase of out.phaseMetrics.filter((x) => x.included)) {
             if (
-              phase.flowBias < -tolerance(phase.targetFlow) &&
+              phase.flowBias < -trackingDecision(flow, phase.medianFlow, phase.targetFlow).value &&
               Number.isFinite(phase.pressureChange) &&
               phase.pressureChange > 0
             )
@@ -4589,13 +4590,7 @@
                         run.times[i] + state.offset,
                       ),
                   ) <=
-                  tolerance(
-                    expectedAt(
-                      state.oxy,
-                      flow.key,
-                      run.times[i] + state.offset,
-                    ),
-                  ),
+                  trackingDecision(flow, run.data[flow.measCol][i], expectedAt(state.oxy, flow.key, run.times[i] + state.offset)).value,
               ),
               limit = Number(state.pressure.limit);
             out.transitionMetrics.push({
@@ -5258,12 +5253,13 @@
           index = Math.min(r.times.length - 1, lowerBound(r.times, time)),
           target = expectedAt(state.oxy, channel.key, r.times[index] + state.offset),
           flow = r.data[channel.measCol][index],
-          z = (flow - target) / (tolerance(target) || 1),
+          decision = trackingDecision(channel, flow, target),
+          z = (flow - target) / (decision.value || 1),
           included = isSampleIncludedForAnalysis(channel, r.times[index] + state.offset, phaseIndexAt(state.oxy, r.times[index] + state.offset)),
           tip = canvas.parentElement.querySelector(".tooltip");
         heatHover = { time: r.times[index], row };
         drawHeatmap(canvas);
-        tip.innerHTML = `<div class="tooltip-head"><b>${esc(channel.label)}</b><span>CSV ${fmt(r.times[index], 2)} s · OXY ${fmt(r.times[index] + state.offset, 2)} s</span></div><div>Measured ${fmt(flow, 2)} · target ${fmt(target, 2)} µL/min</div><div>Deviation/tolerance ${fmt(z, 2)} · ${included ? "included" : "excluded"}</div>`;
+        tip.innerHTML = `<div class="tooltip-head"><b>${esc(channel.label)}</b><span>CSV ${fmt(r.times[index], 2)} s · OXY ${fmt(r.times[index] + state.offset, 2)} s</span></div><div>Measured ${fmt(flow, 2)} · target ${fmt(target, 2)} µL/min</div><div>Signed error ${fmt(flow-target,2)} · process ±${fmt(decision.processValue,3)}</div><div>Manufacturer ${Number.isFinite(decision.manufacturerValue)?"±"+fmt(decision.manufacturerValue,3):"unresolved"} · effective ±${fmt(decision.value,3)}</div><div>${esc(decision.regime)} · ${Math.abs(z)<=1?"pass":"fail"} · ${included ? "included" : "excluded"}</div>`;
         tip.style.display = "block";
         positionTooltip(tip, rect, event.clientX, event.clientY);
       }
@@ -5327,6 +5323,99 @@
       };
       window.addEventListener("resize", moveTabTrace);
       requestAnimationFrame(enhanceUi);
+
+      // Analytical-model migration v2: process acceptance and sensor accuracy are
+      // deliberately separate. Values are canonical µL/min and boundaries are
+      // documented values, never inferred from accuracy ratios.
+      const TOLERANCE_MODEL_VERSION = "2.0.0";
+      const SENSOR_ACCURACY_PROFILES = [
+        ["xs", "FLOW UNIT", "XS", 1.5, .0075, .075, 10],
+        ["s", "FLOW UNIT", "S", 7, .021, .42, 5],
+        ["m", "FLOW UNIT", "M", 80, .12, 2.4, 5],
+        ["l", "FLOW UNIT", "L", 1000, 1.5, 40, 5],
+        ["xl", "FLOW UNIT", "XL", 5000, 10, 200, 5],
+        ["mplus", "FLOW UNIT+", "M+", 2000, .5, 10, 5],
+        ["lplus", "FLOW UNIT+", "L+", 40000, 50, 1000, 5],
+      ].map(([slug, sensorFamily, sensorModel, range, absolute, crossover, percent]) => ({
+        id: `fluigent-${slug}-water-current`, version: "current", manufacturer: "Fluigent",
+        sensorFamily, sensorModel, medium: "water", temperatureCondition: "23 °C",
+        canonicalUnit: "uL/min", validRangeMin: -range, validRangeMax: range,
+        accuracySegments: [
+          { minMagnitude: 0, maxMagnitude: crossover, upperInclusive: true, type: "absolute", value: absolute },
+          { minMagnitude: crossover, lowerExclusive: true, maxMagnitude: Infinity, type: "relativeMeasured", percent },
+        ], sourceLabel: "Fluigent FLOW UNIT technical datasheet", verificationStatus: "manufacturer-documented",
+      }));
+      state.sensorProfiles = SENSOR_ACCURACY_PROFILES;
+      state.sensorAssignments = new Map();
+      function processTolerance(target) {
+        return Math.max(0, Number($("#absTol").value) || 0, (Math.max(0, Number($("#relTol").value) || 0) / 100) * Math.abs(target));
+      }
+      function profileAgreementTolerance(target) { return processTolerance(target); }
+      function assignedSensorProfile(channel) {
+        const id = state.sensorAssignments.get(channel?.key);
+        return state.sensorProfiles.find((p) => p.id === id) || null;
+      }
+      function manufacturerAccuracy(channel, measured) {
+        const profile = assignedSensorProfile(channel);
+        if (!profile || !Number.isFinite(measured)) return { value: NaN, basis: "unresolved", regime: "unresolved", profileId: profile?.id || null, sourceStatus: profile?.verificationStatus || "unresolved" };
+        const magnitude = Math.abs(measured);
+        const segment = profile.accuracySegments.find((s) => magnitude >= s.minMagnitude && (magnitude < s.maxMagnitude || (s.upperInclusive && magnitude <= s.maxMagnitude)));
+        if (!segment) return { value: NaN, basis: "unresolved", regime: "outside profile", profileId: profile.id, sourceStatus: profile.verificationStatus };
+        const value = segment.type === "absolute" ? segment.value : (segment.percent / 100) * magnitude;
+        return { value, basis: segment.type === "absolute" ? "manufacturer-absolute" : "manufacturer-relative-measured", regime: segment.type === "absolute" ? "low-flow absolute" : `${segment.percent}% measured value`, profileId: profile.id, sourceStatus: profile.verificationStatus, profile, segment };
+      }
+      function effectiveTrackingTolerance(channel, measured, target, mode = $("#toleranceMode")?.value || "manufacturer-aware") {
+        const processValue = processTolerance(target), manufacturer = manufacturerAccuracy(channel, measured);
+        const manufacturerValue = manufacturer.value;
+        let value = processValue, basis = "process";
+        if (mode === "manufacturer-only" && Number.isFinite(manufacturerValue)) { value = manufacturerValue; basis = manufacturer.basis; }
+        else if (mode === "manufacturer-aware" && Number.isFinite(manufacturerValue) && manufacturerValue > processValue) { value = manufacturerValue; basis = manufacturer.basis; }
+        return { value, basis, regime: basis === "process" ? "process acceptance" : manufacturer.regime, profileId: manufacturer.profileId, processValue, manufacturerValue, sourceStatus: manufacturer.sourceStatus, usedProcessFallback: !Number.isFinite(manufacturerValue) && mode !== "process-only" };
+      }
+      // Compatibility only for tolerance-independent profile/setpoint paths.
+      tolerance = processTolerance;
+      function trackingDecision(channel, measured, target) { return effectiveTrackingTolerance(channel, measured, target); }
+
+      const legacyCalcMetrics = calcMetrics;
+      calcMetrics = function () {
+        const oxy = state.oxy, run = currentRun(); if (!oxy || !run) return null;
+        const channelMetrics = [], globalAnalysis = newScope(), globalFullRun = newScope();
+        const phaseAgg = oxy.segments.map((s) => ({ id:s.id,label:s.label,start:s.start,end:s.end,duration:s.duration,analysis:newScope(),fullRun:newScope() }));
+        for (const ch of run.mapping.filter((x) => x.measCol)) {
+          const meas=run.data[ch.measCol], sp=ch.setpointCol ? run.data[ch.setpointCol] : null, analysis=newScope(), fullRun=newScope(), phaseLocal=phaseAgg.map(()=>({analysis:newScope(),fullRun:newScope()}));
+          let absoluteRegime=0, relativeRegime=0, unresolved=0, processPass=0, awarePass=0, counted=0;
+          for (let i=0;i<run.times.length;i++) {
+            const time=run.times[i], tp=time+state.offset, pi=phaseIndexAt(oxy,tp), target=expectedAt(oxy,ch.key,tp), actual=meas[i];
+            if (pi<0 || !Number.isFinite(target) || !Number.isFinite(actual)) continue;
+            const decision=trackingDecision(ch,actual,target), processValue=processTolerance(target);
+            const record={e:actual-target,ae:Math.abs(actual-target),tol:decision.value,spError:sp&&Number.isFinite(sp[i])?sp[i]-target:NaN,time};
+            addToScope(fullRun,record); addToScope(phaseLocal[pi].fullRun,record);
+            counted++; processPass += record.ae <= processValue; awarePass += record.ae <= decision.value;
+            if (decision.basis === "manufacturer-absolute") absoluteRegime++; else if (decision.basis === "manufacturer-relative-measured") relativeRegime++; if (!decision.profileId) unresolved++;
+            if (isSampleIncludedForAnalysis(ch,tp,pi)) { const can=sameAnalysisInterval(ch,analysis.prev?.programTime ?? tp,tp); addToScope(analysis,record,can); const ps=phaseLocal[pi].analysis; addToScope(ps,record,sameAnalysisInterval(ch,ps.prev?.programTime ?? tp,tp)); analysis.prev.programTime=tp; ps.prev.programTime=tp; }
+          }
+          mergeScope(globalAnalysis,analysis); mergeScope(globalFullRun,fullRun); phaseLocal.forEach((p,i)=>{mergeScope(phaseAgg[i].analysis,p.analysis);mergeScope(phaseAgg[i].fullRun,p.fullRun);});
+          const profile=assignedSensorProfile(ch); channelMetrics.push({...ch,assignedProfile:profile?.id||null,profileMedium:profile?.medium||"unknown",profileStatus:profile?.verificationStatus||"unresolved",documentedCrossover:profile?.accuracySegments?.[0]?.maxMagnitude??NaN,absoluteRegimePercent:counted?absoluteRegime/counted*100:NaN,relativeRegimePercent:counted?relativeRegime/counted*100:NaN,unresolvedSamples:unresolved,processOnlyPassRate:counted?processPass/counted*100:NaN,manufacturerAwarePassRate:counted?awarePass/counted*100:NaN,analysis:finishScope(analysis),fullRun:finishScope(fullRun),settlingMedian:quantile(calcSettling(oxy,run,ch),.5),phaseLocal:phaseLocal.map(p=>({analysis:finishScope(p.analysis),fullRun:finishScope(p.fullRun)}))});
+        }
+        return {channelMetrics,global:{analysis:finishScope(globalAnalysis),fullRun:finishScope(globalFullRun)},phaseAgg:phaseAgg.map(p=>({...p,analysis:finishScope(p.analysis),fullRun:finishScope(p.fullRun)}))};
+      };
+      calcSettling = function(oxy,run,ch) { const out=[],meas=run.data[ch.measCol],hold=1; for(const tr of oxy.transitions[ch.key]||[]) { if(tr.time<state.offset||tr.time>state.offset+run.duration||!Number.isFinite(tr.from)) continue; const start=run.times.findIndex(t=>t+state.offset>=tr.time); for(let i=start;i>=0&&i<run.times.length;i++){const tar=expectedAt(oxy,ch.key,run.times[i]+state.offset); if(!Number.isFinite(tar)||Math.abs(meas[i]-tar)>trackingDecision(ch,meas[i],tar).value)continue; const t0=run.times[i]; let good=true,j=i; while(j<run.times.length&&run.times[j]-t0<hold){const t=expectedAt(oxy,ch.key,run.times[j]+state.offset);if(!Number.isFinite(meas[j])||Math.abs(meas[j]-t)>trackingDecision(ch,meas[j],t).value){good=false;break;}j++;}if(good&&j<run.times.length){out.push(Math.max(0,t0-(tr.time-state.offset)));break;}}}return out; };
+      const modelRenderData = renderData;
+      renderData = function () { modelRenderData(); const r=currentRun(); if (!r) return; const options=state.sensorProfiles.map(x=>`<option value="${x.id}">${x.sensorFamily} ${x.sensorModel} · ${x.medium}</option>`).join(""); const rows=r.mapping.map(ch=>{const p=assignedSensorProfile(ch); return `<tr><td>${esc(ch.label)}</td><td>${p?esc(`${p.sensorFamily} ${p.sensorModel}`):'<span class="badge warn">Accuracy profile unconfirmed</span>'}</td><td>${p?esc(p.medium):"unknown"}</td><td>${p?fmt(p.accuracySegments[0].maxMagnitude,3)+" µL/min":"—"}</td><td><select data-profile-channel="${esc(ch.key)}"><option value="">Unresolved / process fallback</option>${state.sensorProfiles.map(x=>`<option value="${x.id}" ${p?.id===x.id?"selected":""}>${x.sensorFamily} ${x.sensorModel} · ${x.medium}</option>`).join("")}</select></td></tr>`;}).join(""); const panel=document.createElement("div"); panel.innerHTML=`<div class="panel-head"><div><h2>Sensor accuracy assignments</h2><p>Profiles are independent of reported sensor range. Legacy/custom channels remain unresolved until assigned.</p></div></div><div class="table-wrap"><table><thead><tr><th>Channel</th><th>Profile</th><th>Medium</th><th>Documented crossover</th><th>Assignment</th></tr></thead><tbody>${rows}</tbody></table></div><div class="inline2"><div class="field"><label>Bulk apply documented profile</label><select id="bulkProfile"><option value="">Choose profile</option>${options}</select></div><div class="field"><label>&nbsp;</label><button class="btn" id="bulkApplyBtn">Apply to mapped channels</button></div></div><details class="callout"><summary><strong>Custom accuracy profile</strong></summary><div class="inline2"><div class="field"><label>Name/model</label><input id="customModel" placeholder="Custom M" /></div><div class="field"><label>Medium</label><input id="customMedium" placeholder="water" /></div><div class="field"><label>Valid ± range µL/min</label><input id="customRange" type="number" min="0" /></div><div class="field"><label>Low-flow absolute ± µL/min</label><input id="customAbsolute" type="number" min="0" step="any" /></div><div class="field"><label>Crossover µL/min</label><input id="customCrossover" type="number" min="0" step="any" /></div><div class="field"><label>High-flow % measured</label><input id="customPercent" type="number" min="0" step="any" /></div></div><div class="field"><label>Source note</label><input id="customSource" placeholder="Reference or source note" /></div><button class="btn" id="saveCustomProfile">Save custom profile</button></details><details class="callout"><summary><strong>Why low-flow accuracy switches</strong></summary>Manufacturer accuracy is measurement uncertainty, not controller performance or repeatability. An M+ water profile uses ±0.5 µL/min at 5 and 10 µL/min, then 5% of measured flow (±1 µL/min at 20 µL/min). Unresolved profiles use process acceptance only in manufacturer-aware mode.</details>`; $("#view-data").prepend(panel); panel.onchange=e=>{const s=e.target.closest("[data-profile-channel]");if(!s)return;s.value?state.sensorAssignments.set(s.dataset.profileChannel,s.value):state.sensorAssignments.delete(s.dataset.profileChannel);renderAll();}; $("#bulkApplyBtn").onclick=()=>{const id=$("#bulkProfile").value;if(!id)return;r.mapping.filter(x=>x.measCol).forEach(x=>state.sensorAssignments.set(x.key,id));renderAll();}; $("#saveCustomProfile").onclick=()=>{const model=$("#customModel").value.trim(),medium=$("#customMedium").value.trim(),range=Number($("#customRange").value),absolute=Number($("#customAbsolute").value),crossover=Number($("#customCrossover").value),percent=Number($("#customPercent").value),source=$("#customSource").value.trim();if(!model||![range,absolute,crossover,percent].every(Number.isFinite))return;const id=`custom-${Date.now()}`;state.sensorProfiles.push({id,version:"user",manufacturer:"user-entered",sensorFamily:"Custom",sensorModel:model,medium:medium||"unknown",temperatureCondition:"unknown",canonicalUnit:"uL/min",validRangeMin:-range,validRangeMax:range,accuracySegments:[{minMagnitude:0,maxMagnitude:crossover,upperInclusive:true,type:"absolute",value:absolute},{minMagnitude:crossover,lowerExclusive:true,maxMagnitude:Infinity,type:"relativeMeasured",percent}],sourceLabel:source||"No source supplied",verificationStatus:"user-entered"});renderAll();}; };
+      $("#toleranceMode").onchange = renderAll;
+      drawHeatmap = function(canvas) {
+        if (!canvas) return; const {ctx,w,h}=canvasSetup(canvas), r=currentRun(), o=state.oxy; if(!r||!o)return;
+        const chs=r.mapping.filter(ch=>ch.measCol), L=115,R=12,T=14,B=28,pw=w-L-R,ph=h-T-B,rowH=ph/Math.max(1,chs.length);
+        ctx.clearRect(0,0,w,h);ctx.font='11px "JetBrains Mono", ui-monospace';ctx.fillStyle=css("--muted");ctx.textAlign="right";ctx.textBaseline="middle";
+        chs.forEach((ch,ri)=>{ctx.fillText(ch.label,L-7,T+rowH*(ri+.5));const data=r.data[ch.measCol],step=Math.max(1,Math.floor(r.times.length/pw));for(let i=0;i<r.times.length;i+=step){const tp=r.times[i]+state.offset,target=expectedAt(o,ch.key,tp),actual=data[i];if(!Number.isFinite(target)||!Number.isFinite(actual))continue;const included=isSampleIncludedForAnalysis(ch,tp,phaseIndexAt(o,tp)),d=trackingDecision(ch,actual,target),z=(actual-target)/(d.value||1),mag=Math.min(1,Math.abs(z)/3);ctx.fillStyle=!included?"rgba(120,130,145,.18)":Math.abs(z)<=1?`rgba(36,160,110,${.14+mag*.18})`:z>0?`rgba(196,61,79,${.22+mag*.68})`:`rgba(15,111,255,${.22+mag*.68})`;const x=L+r.times[i]/r.duration*pw,x2=L+r.times[Math.min(r.times.length-1,i+step)]/r.duration*pw;ctx.fillRect(x,T+ri*rowH,Math.max(1,x2-x+.5),rowH+.5);}});
+        ctx.strokeStyle=css("--line");ctx.strokeRect(L,T,pw,ph);ctx.fillStyle=css("--muted");ctx.textAlign="center";ctx.textBaseline="top";for(let i=0;i<=6;i++)ctx.fillText(fmt(r.duration*i/6,0),L+pw*i/6,h-B+7);ctx.fillText("CSV elapsed time (s) · colors = deviation ÷ active channel- and sample-specific tolerance",L+pw/2,h-3);
+        if (!canvas.dataset.modelHeatInteractive) { canvas.dataset.modelHeatInteractive="1"; canvas.addEventListener("pointermove",e=>updateHeatHover(e,canvas)); canvas.addEventListener("pointerleave",()=>canvas.parentElement.querySelector(".tooltip").style.display="none"); }
+      };
+      const modelRenderOverview = renderOverview;
+      renderOverview = function () { modelRenderOverview(); if (!state.metrics) return; const channels=state.metrics.channelMetrics, verified=channels.filter(x=>x.profileStatus==="manufacturer-documented").length, unresolved=channels.length-verified, all=channels.reduce((n,x)=>n+x.fullRun.n,0), absolute=channels.reduce((n,x)=>n+x.fullRun.n*(x.absoluteRegimePercent||0)/100,0); const card=document.createElement("div");card.className="callout";card.innerHTML=`<strong>Tolerance basis.</strong> ${verified} verified · ${unresolved} unresolved. ${all?fmt(absolute/all*100,1):"0.0"}% of samples used absolute sensor accuracy; remaining verified samples use relative measured-value accuracy. Unresolved channels use process tolerance only in manufacturer-aware mode.`;$("#view-overview").prepend(card); };
+      const modelRenderDeviation = renderDeviation;
+      renderDeviation = function () { modelRenderDeviation(); const p=$("#view-deviation .panel-head p"); if(p)p.textContent="Colors show deviation divided by the active channel- and sample-specific tolerance. Gray cells are excluded by transition grace."; };
+      $("#exportJsonBtn").onclick = () => { if(!state.metrics)return; const channels=state.metrics.channelMetrics; const out={generated:new Date().toISOString(),analyticalModelVersion:TOLERANCE_MODEL_VERSION,oxy:{name:state.oxy.name,version:state.oxy.version,programDuration:state.oxy.programDuration},run:{name:currentRun().name,duration:currentRun().duration,rows:currentRun().rowCount,alignmentOffset:state.offset},toleranceModel:{mode:$("#toleranceMode").value,process:{relativePercent:Number($("#relTol").value),absoluteFloorUlMin:Number($("#absTol").value)},sensorProfiles:state.sensorProfiles,channelAssignments:channels.map(x=>({channelKey:x.key,profileId:x.assignedProfile,medium:x.profileMedium,status:x.profileStatus})),unresolvedChannels:channels.filter(x=>!x.assignedProfile).map(x=>x.key)},settings:{transitionGraceSeconds:Number($("#grace").value)},metrics:{analysis:state.metrics.global.analysis,fullRun:state.metrics.global.fullRun},channels,pressureAnalysis:pressureAnalysis()};download("oxy_trace_analysis.json",JSON.stringify(out,null,2),"application/json"); };
     </script>
   </body>
 </html>

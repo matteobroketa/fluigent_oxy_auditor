@@ -84,18 +84,28 @@ volume [µL] = integral(flow error [µL/min] * dt [s]) / 60
 
 Never integrate across an interval that has been excluded from active analysis. Each continuous included interval must integrate independently.
 
-## 5. Tolerance
+## 5. Versioned tolerance model
 
-A useful default sample-level tolerance rule is:
+Analytical model version 2 separates three concepts which must not be conflated.
+
+**Process tolerance** is the experimental acceptance criterion:
 
 ```text
 absolute tracking error <= max(
-    absolute tolerance,
-    relative tolerance * absolute target
+    process absolute floor,
+    process relative tolerance * absolute target
 )
 ```
 
-An absolute floor is necessary near zero-flow targets, where percentage-only tolerances become unstable or unrealistically strict.
+**Manufacturer sensor-accuracy envelope** is a channel-specific measurement-uncertainty statement. It is evaluated from the assigned documented profile and the absolute measured flow. Profiles contain explicit piecewise segments and a documented crossover; they are never inferred by dividing an absolute specification by a percentage. At an inclusive low-flow crossover the absolute segment is used.
+
+**Effective tracking tolerance** is a practical comparison band, not formal uncertainty propagation. The default manufacturer-aware mode uses the greater of process tolerance and the manufacturer envelope. Process-only and manufacturer-specification-only modes are also available. An unresolved profile falls back to process tolerance in manufacturer-aware mode and is clearly marked.
+
+Profile agreement (CSV controller setpoint versus OXY target) always uses process tolerance only; no measurement accuracy is applied to it.
+
+Documented Fluigent water profiles include FLOW UNIT XS, S, M, L and XL plus FLOW UNIT+ M+ and L+. They are stored in canonical µL/min with bidirectional valid ranges, source/status metadata, medium, temperature condition, and explicit absolute/relative-measured segments. nL/min, µL/min, and mL/min are converted to canonical units at import.
+
+Manufacturer accuracy describes measurement uncertainty, not controller performance or repeatability. A sample inside the envelope is not proof that true flow exactly matched target.
 
 ## 6. Transition grace
 
@@ -150,8 +160,8 @@ Exports should record enough analysis configuration to reproduce results, includ
 
 - OXY/CSV filenames or non-sensitive identifiers;
 - alignment offset;
-- absolute tolerance;
-- relative tolerance;
+- process absolute floor and relative tolerance;
+- tolerance mode, sensor profiles, channel assignments, source/status, and unresolved channels;
 - transition grace;
 - enabled/excluded phases;
 - metric scope names;

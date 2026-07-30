@@ -16,6 +16,7 @@ It reconstructs the OXY timeline, maps recorded flow channels, aligns CSV elapse
 - Inspect flow traces, deviation traces, phase summaries, channel mappings, and interactive hover values.
 - Pan and zoom charts; phase enablement and transition-grace filtering are applied consistently to analysis views.
 - Report profile MAE, tracking MAE/RMSE, bias, P95 and maximum absolute error, tolerance compliance, signed and absolute volume error, and settling time.
+- Use a versioned manufacturer-aware tracking model with documented, piecewise Fluigent water accuracy profiles; process acceptance and measurement accuracy remain separate.
 - Explain metrics in the interface, including the distinction between profile agreement and tracking accuracy.
 - Export flow analysis as CSV and JSON.
 - Use accessible keyboard-navigable analysis tabs, reduced-motion support,

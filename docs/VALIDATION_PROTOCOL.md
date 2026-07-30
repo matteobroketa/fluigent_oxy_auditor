@@ -46,6 +46,10 @@ Minimum useful cases:
 8. Non-contiguous excluded phases.
 9. Missing recorded setpoint columns.
 10. Near-zero target values exercising the absolute tolerance floor.
+11. Manufacturer profiles at exact crossovers: M+ (5, 10, 20 → 0.5, 0.5, 1.0 µL/min), S (0.2, 0.42, 1 → .021, .021, .05), XS (.05, .075, .1 → .0075, .0075, .01), and L+ (500, 1000, 2000 → 50, 50, 100).
+12. Negative and zero measured flow use the same absolute-magnitude and low-flow rules.
+13. Unknown models remain unresolved and do not receive an invented manufacturer specification.
+14. Changing tolerance mode changes only acceptance-band metrics (pass rate, normalized error, heatmap, settling and diagnostics), never MAE, RMSE, bias, quantiles, or volume error.
 
 ## UI/browser checks
 
