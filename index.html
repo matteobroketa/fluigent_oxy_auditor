@@ -521,6 +521,48 @@
         align-items: center;
         flex-wrap: wrap;
       }
+      .filter-bar {
+        display: flex;
+        align-items: end;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        margin: 4px 0 16px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel2);
+      }
+      .filter-field {
+        display: grid;
+        gap: 4px;
+        min-width: 190px;
+      }
+      .filter-field label {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .filter-field select {
+        min-width: 0;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        padding: 8px 9px;
+        border-radius: 9px;
+      }
+      .filter-summary {
+        align-self: center;
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .filter-empty {
+        padding: 22px;
+        color: var(--muted);
+        text-align: center;
+      }
       .toggle {
         display: flex;
         align-items: center;
@@ -1453,6 +1495,7 @@
         showSetpoint: true,
         showPhases: true,
         enabledPhases: new Set(),
+        dataFilters: { phase: "all", metric: "all" },
         views: { overview: null, traces: null },
         hover: {},
       };
@@ -2251,9 +2294,39 @@
           renderAll();
         };
       }
+      const dataMetricDefs = [
+        { key: "profileMae", label: "Profile MAE", unit: "µL/min" },
+        { key: "mae", label: "Tracking MAE", unit: "µL/min" },
+        { key: "rmse", label: "Tracking RMSE", unit: "µL/min" },
+        { key: "bias", label: "Bias", unit: "µL/min" },
+        { key: "within", label: "Within tolerance", unit: "%" },
+        { key: "signedVol", label: "Signed volume error", unit: "µL" },
+        { key: "absVol", label: "Absolute volume error", unit: "µL" },
+      ];
+      function renderDataMetricValue(scope, key) {
+        const value = scope?.[key];
+        return key === "within" ? pct(value) : fmt(value, 2);
+      }
       function renderData() {
         const o = state.oxy,
-          r = currentRun();
+          r = currentRun(),
+          filters = state.dataFilters,
+          selectedPhase = filters.phase === "all" ? null : Number(filters.phase),
+          phase = selectedPhase == null ? null : o.segments[selectedPhase],
+          metricDefs =
+            filters.metric === "all"
+              ? dataMetricDefs
+              : dataMetricDefs.filter((x) => x.key === filters.metric),
+          metricChannels = state.metrics.channelMetrics,
+          metricRows = metricChannels
+            .map((ch) => {
+              const scope =
+                selectedPhase == null
+                  ? ch.analysis
+                  : ch.phaseLocal[selectedPhase]?.analysis;
+              return `<tr><td>${esc(ch.label)}<div class="hint">Flowboard ${esc(ch.serial)} · port ${esc(ch.port)}</div></td><td>${phase ? esc(phase.label) : "All phases"}</td>${metricDefs.map((metric) => `<td>${renderDataMetricValue(scope, metric.key)}</td>`).join("")}</tr>`;
+            })
+            .join("");
         const mapRows = r.mapping
           .map(
             (ch) =>
@@ -2264,13 +2337,46 @@
           .map((c) => `<th>${esc(c.label)}</th>`)
           .join("");
         const segRows = o.segments
+          .map((s, i) => ({ s, i }))
+          .filter(({ i }) => selectedPhase == null || i === selectedPhase)
           .map(
-            (s, i) =>
+            ({ s, i }) =>
               `<tr><td>${i + 1}. ${esc(s.label)}</td><td>${fmt(s.start, 1)}–${fmt(s.end, 1)}</td><td>${fmt(s.duration, 1)}</td>${o.channels.map((c) => `<td>${fmt(Number(s.state[c.key]), 2)}</td>`).join("")}</tr>`,
           )
           .join("");
+        const phaseOptions = [
+          `<option value="all" ${filters.phase === "all" ? "selected" : ""}>All phases</option>`,
+          ...o.segments.map(
+            (s, i) =>
+              `<option value="${i}" ${filters.phase === String(i) ? "selected" : ""}>${i + 1}. ${esc(s.label)}</option>`,
+          ),
+        ].join("");
+        const metricOptions = [
+          `<option value="all" ${filters.metric === "all" ? "selected" : ""}>All metrics</option>`,
+          ...dataMetricDefs.map(
+            (metric) =>
+              `<option value="${metric.key}" ${filters.metric === metric.key ? "selected" : ""}>${metric.label}</option>`,
+          ),
+        ].join("");
+        const metricHeads = metricDefs
+          .map((metric) => `<th>${metric.label}<div class="hint">${metric.unit}</div></th>`)
+          .join("");
+        const phaseSummary = phase ? `phase “${phase.label}”` : "all phases";
+        const metricSummary = filters.metric === "all" ? "all metrics" : metricDefs[0].label;
         $("#view-data").innerHTML =
-          `<div class="panel-head"><div><h2>Channel mapping</h2><p>OXY flow units mapped to CSV columns by Flowboard serial and port.</p></div></div><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>OXY label</th><th>Flowboard</th><th>Port</th><th>Measured CSV column</th><th>Recorded setpoint column</th></tr></thead><tbody>${mapRows}</tbody></table></div><div class="panel-head"><div><h2>Reconstructed intended profile</h2><p>${esc(o.name)} · OXY version ${esc(o.version)} · values in µL/min.</p></div></div><div class="table-wrap"><table><thead><tr><th>Phase</th><th>Program time s</th><th>Duration s</th>${targetHeads}</tr></thead><tbody>${segRows}</tbody></table></div>`;
+          `<div class="panel-head"><div><h2>Channel mapping</h2><p>OXY flow units mapped to CSV columns by Flowboard serial and port.</p></div></div><div class="filter-bar" aria-label="Profile and metric filters"><div class="filter-field"><label for="dataPhaseFilter">Filter by phase</label><select id="dataPhaseFilter">${phaseOptions}</select></div><div class="filter-field"><label for="dataMetricFilter">Filter by metric</label><select id="dataMetricFilter">${metricOptions}</select></div><button class="btn" id="clearDataFilters" type="button">Reset filters</button><span class="filter-summary">Showing ${metricChannels.length} channels · ${phaseSummary} · ${metricSummary}</span></div><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>OXY label</th><th>Flowboard</th><th>Port</th><th>Measured CSV column</th><th>Recorded setpoint column</th></tr></thead><tbody>${mapRows}</tbody></table></div><div class="panel-head"><div><h2>Reconstructed intended profile</h2><p>${esc(o.name)} · OXY version ${esc(o.version)} · values in µL/min. The phase filter narrows this table.</p></div></div><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Phase</th><th>Program time s</th><th>Duration s</th>${targetHeads}</tr></thead><tbody>${segRows || '<tr><td class="filter-empty" colspan="3">No phase matches the current filter.</td></tr>'}</tbody></table></div><div class="panel-head"><div><h2>Filtered metric view</h2><p>Analysis metrics for ${phase ? `the ${esc(phase.label)} phase` : "all enabled phases"}. Select a metric above to focus the table.</p></div></div><div class="table-wrap"><table><thead><tr><th>Channel</th><th>Scope</th>${metricHeads}</tr></thead><tbody>${metricRows || '<tr><td class="filter-empty" colspan="3">No mapped channels available.</td></tr>'}</tbody></table></div>`;
+        $("#dataPhaseFilter").onchange = (e) => {
+          state.dataFilters.phase = e.target.value;
+          renderAll();
+        };
+        $("#dataMetricFilter").onchange = (e) => {
+          state.dataFilters.metric = e.target.value;
+          renderAll();
+        };
+        $("#clearDataFilters").onclick = () => {
+          state.dataFilters = { phase: "all", metric: "all" };
+          renderAll();
+        };
       }
       function canvasSetup(canvas) {
         const dpr = window.devicePixelRatio || 1,
@@ -3063,6 +3169,7 @@
         try {
           state.oxy = parseOxy(text, name);
           state.enabledPhases = new Set(state.oxy.segments.map((s) => s.id));
+          state.dataFilters = { phase: "all", metric: "all" };
           state.views = { overview: null, traces: null };
           $("#oxyState").textContent =
             `${name} · ${state.oxy.channels.length} flow units · ${fmt(state.oxy.programDuration, 1)} s`;
