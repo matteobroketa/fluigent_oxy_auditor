@@ -61,6 +61,22 @@ No installation or local web server is required. Clone or download the repositor
 5. Confirm pressure units and mappings before interpreting Pressure results.
 6. Export the relevant analysis CSV or JSON.
 
+CSV time columns can contain numeric elapsed seconds (including decimal commas in semicolon-delimited files) or date/time stamps. The first sample determines the time format for the column; all times are normalized to seconds since that sample.
+
+OXY loops require non-negative whole-number iteration counts. Import is limited to 100 nesting levels and 100,000 expanded steps, counting both functions and loop iterations, so an oversized or malformed profile cannot lock the browser. Split larger profiles into smaller runs. Theme switching remains available when browser storage is disabled; the preference then lasts only for the current session.
+
+## Validate changes
+
+With Python 3 and Node.js 22 or newer available:
+
+```bash
+python scripts/smoke_check.py
+python scripts/tolerance_model_test.py
+node --test scripts/core.test.cjs
+```
+
+The checks cover static structure and inline JavaScript syntax, documented tolerance profiles, elapsed-time parsing, and bounded OXY loop expansion. They do not require runtime or test package dependencies.
+
 ## Analysis scope
 
 The primary **analysis** scope includes valid samples in enabled OXY phases, excluding the configured grace period after a genuine target change for that channel. The **full-run** reference retains valid samples in enabled phases, including those transition samples. Disabled phases are excluded from both scopes.

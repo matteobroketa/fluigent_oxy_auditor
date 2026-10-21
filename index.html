@@ -1553,12 +1553,26 @@
       }
       function parseOxy(text, name = "profile.oxy") {
         const obj = JSON.parse(text.replace(/^\uFEFF/, ""));
+        if (!obj || typeof obj !== "object" || Array.isArray(obj))
+          throw new Error("OXY profile must be a JSON object.");
+        const maxExpandedSteps = 100000;
+        let expandedSteps = 0;
+        function countStep() {
+          if (++expandedSteps > maxExpandedSteps)
+            throw new Error("OXY program exceeds the 100,000 expanded-step limit. Reduce loop counts or split the profile.");
+        }
         const instruments = new Map(
           (obj.Instruments || []).map((x) => [x.Key, x]),
         );
         const labels = new Map();
-        function collect(fs) {
+        function collect(fs, depth = 0) {
+          if (depth > 100)
+            throw new Error("OXY program nesting exceeds 100 levels.");
+          if (fs != null && !Array.isArray(fs))
+            throw new Error("OXY Functions must be an array.");
           for (const f of fs || []) {
+            if (!f || typeof f !== "object" || Array.isArray(f))
+              throw new Error("OXY functions must be objects.");
             const typ = (f.$type || "").split("|").pop();
             if (typ === "SetValue") {
               for (const k of f.InstrumentKeys || []) {
@@ -1568,7 +1582,7 @@
                 }
               }
             }
-            if (f.Functions) collect(f.Functions);
+            if (f.Functions) collect(f.Functions, depth + 1);
           }
         }
         collect(obj.Functions);
@@ -1592,6 +1606,7 @@
           segments = [];
         function run(fs, t, parentLabel = "") {
           for (const f of fs || []) {
+            countStep();
             const typ = (f.$type || "").split("|").pop();
             if (typ === "SetValue") {
               let [v, u] = parseNumberUnit(f.Setpoint);
@@ -1614,8 +1629,15 @@
             } else if (typ === "Group") {
               t = run(f.Functions, t, f.UserLabel || parentLabel);
             } else if (typ === "For") {
-              const n = Math.max(0, Number(f.Iterations) || 0);
-              for (let i = 0; i < n; i++) t = run(f.Functions, t, parentLabel);
+              const n = Number(f.Iterations);
+              if (!Number.isSafeInteger(n) || n < 0)
+                throw new Error("OXY loop iterations must be a finite non-negative whole number.");
+              if (n > maxExpandedSteps)
+                throw new Error("OXY program exceeds the 100,000 expanded-step limit. Reduce loop counts or split the profile.");
+              for (let i = 0; i < n; i++) {
+                countStep();
+                t = run(f.Functions, t, parentLabel);
+              }
             } else if (typ === "ResetAll" && stateMap.size) {
               for (const k of stateMap.keys()) stateMap.set(k, 0);
             }
@@ -1691,6 +1713,19 @@
         const v = Number(s);
         return Number.isFinite(v) ? v : NaN;
       }
+      function elapsedTimes(values) {
+        // Date.parse accepts short numeric strings as calendar dates. Decide
+        // once from the first sample so elapsed seconds remain numeric.
+        const numeric = Number.isFinite(parseNum(values[0]));
+        const parse = numeric
+          ? parseNum
+          : (value) => Date.parse(String(value).trim().replace(" ", "T"));
+        const first = parse(values[0]);
+        if (!Number.isFinite(first))
+          throw new Error("Could not parse the CSV time column.");
+        const scale = numeric ? 1 : 1000;
+        return values.map((value) => (parse(value) - first) / scale);
+      }
       function parseCSV(text, name = "trace.csv") {
         const lines = text
           .replace(/^\uFEFF/, "")
@@ -1706,22 +1741,7 @@
         }
         let timeIndex = headers.findIndex((h) => /^time$/i.test(h.trim()));
         if (timeIndex < 0) timeIndex = 0;
-        const timeRaw = rows.map((r) => r[timeIndex]);
-        const parseDate = (s) => {
-          const x = Date.parse(String(s).trim().replace(" ", "T"));
-          return Number.isFinite(x) ? x : NaN;
-        };
-        let t0 = parseDate(timeRaw[0]);
-        let times = timeRaw.map((s, i) => {
-          const d = parseDate(s);
-          return Number.isFinite(d) && Number.isFinite(t0)
-            ? (d - t0) / 1000
-            : parseNum(s);
-        });
-        if (!Number.isFinite(times[0]))
-          throw new Error("Could not parse the CSV time column.");
-        const base = times[0];
-        times = times.map((x) => x - base);
+        const times = elapsedTimes(rows.map((r) => r[timeIndex]));
         const data = {};
         headers.forEach((h, j) => {
           if (j !== timeIndex) data[h] = rows.map((r) => parseNum(r[j]));
@@ -3748,19 +3768,7 @@
         }
         let timeIndex = headers.findIndex((h) => /^time$/i.test(h.trim()));
         if (timeIndex < 0) timeIndex = 0;
-        const timeRaw = rows.map((r) => r[timeIndex]),
-          date = (s) => Date.parse(String(s).trim().replace(" ", "T")),
-          t0 = date(timeRaw[0]);
-        let times = timeRaw.map((s) => {
-          const d = date(s);
-          return Number.isFinite(d) && Number.isFinite(t0)
-            ? (d - t0) / 1000
-            : parseNum(s);
-        });
-        if (!Number.isFinite(times[0]))
-          throw new Error("Could not parse the CSV time column.");
-        const base = times[0];
-        times = times.map((t) => t - base);
+        const times = elapsedTimes(rows.map((r) => r[timeIndex]));
         const data = {};
         headers.forEach((h, j) => {
           if (j !== timeIndex) data[h] = rows.map((r) => parseNum(r[j]));
@@ -5044,7 +5052,12 @@
         if (label) label.textContent = dark ? "Light mode" : "Dark mode";
         button.setAttribute("aria-label", `Switch to ${dark ? "light" : "dark"} mode`);
       }
-      const savedTheme = localStorage.getItem("oxy-auditor-theme");
+      let savedTheme;
+      try {
+        savedTheme = localStorage.getItem("oxy-auditor-theme");
+      } catch {
+        // Storage can be disabled by browser privacy settings or file origins.
+      }
       if (savedTheme === "light" || savedTheme === "dark")
         document.documentElement.dataset.theme = savedTheme;
       updateThemeButton();
@@ -5052,7 +5065,11 @@
         const apply = () => {
           const next = effectiveDark() ? "light" : "dark";
           document.documentElement.dataset.theme = next;
-          localStorage.setItem("oxy-auditor-theme", next);
+          try {
+            localStorage.setItem("oxy-auditor-theme", next);
+          } catch {
+            // Theme switching still works for this session without persistence.
+          }
           updateThemeButton();
           renderAll();
         };

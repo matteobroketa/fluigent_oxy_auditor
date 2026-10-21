@@ -16,5 +16,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
 
-      - name: Run static smoke checks
-        run: python scripts/smoke_check.py
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Run application regression checks
+        run: |
+          python scripts/smoke_check.py
+          python scripts/tolerance_model_test.py
+          node --test scripts/core.test.cjs
