@@ -3234,9 +3234,20 @@
           )
           .join("");
       }
+      const fileLoadVersions = { oxy: 0, csv: 0 };
       async function readFiles(files, kind) {
-        for (const f of files) {
-          const text = await f.text();
+        const version = kind === "oxy" ? ++fileLoadVersions.oxy : fileLoadVersions.csv;
+        for (const f of Array.from(files)) {
+          if (version !== fileLoadVersions[kind]) return;
+          let text;
+          try {
+            text = await f.text();
+          } catch (error) {
+            if (version !== fileLoadVersions[kind]) return;
+            alert(`Could not read ${f.name}: ${error.message || error}. Select the file again to retry.`);
+            continue;
+          }
+          if (version !== fileLoadVersions[kind]) return;
           if (kind === "oxy") loadOxyText(text, f.name);
           else loadCsvText(text, f.name);
         }
@@ -3253,7 +3264,11 @@
           drop.classList.remove("drag");
           readFiles(e.dataTransfer.files, kind);
         };
-        input.onchange = (e) => readFiles(e.target.files, kind);
+        input.onchange = (e) => {
+          const files = Array.from(e.target.files);
+          e.target.value = "";
+          return readFiles(files, kind);
+        };
       }
       setupDrop($("#oxyDrop"), $("#oxyInput"), "oxy");
       setupDrop($("#csvDrop"), $("#csvInput"), "csv");
@@ -5145,6 +5160,7 @@
           clear.innerHTML = icon("close");
           clear.onclick = (event) => {
             event.stopPropagation();
+            fileLoadVersions[kind]++;
             if (kind === "oxy") {
               state.oxy = null;
               state.metrics = null;
@@ -5191,8 +5207,10 @@
         if (state.runs.length) setDropLoaded("csv", true);
       };
       const instrumentReadFiles = readFiles;
+      let pendingFileReads = 0;
       readFiles = async function (files, kind) {
         if (!files?.length) return;
+        pendingFileReads++;
         $(".status").classList.add("loading");
         $("#statusDot").className = "dot";
         $("#statusText").textContent = `Reading ${files.length} ${kind.toUpperCase()} file${files.length === 1 ? "" : "s"} locally…`;
@@ -5205,7 +5223,12 @@
             setTimeout(() => content.classList.remove("settling"), 650);
           }
         } finally {
-          $(".status").classList.remove("loading");
+          pendingFileReads--;
+          if (!pendingFileReads) {
+            $(".status").classList.remove("loading");
+            if (state.oxy && currentRun()) updateStatus();
+            else $("#statusText").textContent = "Load an OXY profile and CSV trace.";
+          }
         }
       };
 

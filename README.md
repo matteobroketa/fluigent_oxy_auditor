@@ -61,6 +61,8 @@ No installation or local web server is required. Clone or download the repositor
 5. Confirm pressure units and mappings before interpreting Pressure results.
 6. Export the relevant analysis CSV or JSON.
 
+Unreadable files report a retryable error without discarding loaded data; other CSV files in the selection still load. Clearing a file group cancels pending imports for that group. A newer OXY selection takes precedence over an older file that finishes reading later.
+
 CSV time columns can contain numeric elapsed seconds (including decimal commas in semicolon-delimited files) or date/time stamps. The first sample determines the time format for the column; all times are normalized to seconds since that sample.
 
 OXY loops require non-negative whole-number iteration counts. Import is limited to 100 nesting levels and 100,000 expanded steps, counting both functions and loop iterations, so an oversized or malformed profile cannot lock the browser. Split larger profiles into smaller runs. Theme switching remains available when browser storage is disabled; the preference then lasts only for the current session.
@@ -72,10 +74,10 @@ With Python 3 and Node.js 22 or newer available:
 ```bash
 python scripts/smoke_check.py
 python scripts/tolerance_model_test.py
-node --test scripts/core.test.cjs
+node --test scripts/*.test.cjs
 ```
 
-The checks cover static structure and inline JavaScript syntax, documented tolerance profiles, elapsed-time parsing, and bounded OXY loop expansion. They do not require runtime or test package dependencies.
+The checks cover static structure and inline JavaScript syntax, documented tolerance profiles, elapsed-time parsing, bounded OXY loop expansion, and file-read recovery/cancellation. They do not require runtime or test package dependencies.
 
 ## Analysis scope
 
